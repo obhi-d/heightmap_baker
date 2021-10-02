@@ -2,7 +2,7 @@
 bl_info = {
     "name": "Heightmap Baker",
     "author": "Abhishek Dey",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (2, 80, 0),
     "location": "3D View > UI (Right Panel) > Heightmap Baker",
     "description": ("Script to export Heightmap"),
@@ -14,50 +14,51 @@ bl_info = {
 
 import bpy
 from bpy.types import Operator, AddonPreferences
-from bpy.props import StringProperty, IntProperty, BoolProperty
+from bpy.props import StringProperty, IntProperty, BoolProperty, FloatProperty, EnumProperty
 
 class HeightmapBakerPreferences(bpy.types.AddonPreferences):
     # this must match the add-on name, use '__package__'
     # when defining this in a submodule of a python package.
     bl_idname = __name__
 
-    width: bpy.props.IntProperty(
-        name="Width",
-        default=True)
-    height: bpy.props.IntProperty(
-        name="Height",
-        default=True)
+
+    width   : IntProperty(name="Width"  , default=True)
+    height  : IntProperty(name="Height" , default=True)
+    range_x : IntProperty(name="Range X", default=True)
+    range_y : IntProperty(name="Range Y", default=True)
+
+    noise_offset_x : FloatProperty(name="Noise Offset X", default=0.0)
+    noise_offset_y : FloatProperty(name="Noise Offset Y", default=0.0)
+
+    noise_size_x : FloatProperty(name="Noise Size X", default=1.0)
+    noise_size_y : FloatProperty(name="Noise Size Y", default=1.0)
         
-    outpath: StringProperty(
-        name="Output Dir",
-        subtype='FILE_PATH',
-    )
+    outpath : StringProperty(name="Output Dir", subtype='FILE_PATH',)
 
     def draw(self, context):
         layout = self.layout
         box = layout.box()
+        box.label(text="Streaming")
         box.row().prop(self, "width")
         box.row().prop(self, "height")
+        box.row().prop(self, "range_x")
+        box.row().prop(self, "range_y")
+        box.row().prop(self, "noise_offset_x")
+        box.row().prop(self, "noise_offset_y")
+        box.row().prop(self, "noise_size_x")
+        box.row().prop(self, "noise_size_y")
         box.row().prop(self, "outpath")
-
+        
 
 class OBJECT_OT_HeightmapBake(bpy.types.Operator):
     bl_idname = "heightmap_baker.bake"
     bl_label = "Export Heightmap"
     bl_description = "Export selected object as heightmap"
 
-    def execute(self, context):
-        preferences = context.preferences
-        addon_prefs = preferences.addons[__name__].preferences
-        if bpy.context.object == None:
-            self.report({'ERROR_INVALID_INPUT'}, "Error: no object selected.")
-            return{ 'CANCELLED'}
-        if bpy.context.object.type != 'MESH':
-            self.report({'ERROR_INVALID_INPUT'}, "Error: %s is not a Mesh." % bpy.context.object.name)
-            return{ 'CANCELLED'}
-            
+    def export_mesh(self, addon_prefs, path, rx, ry):
+                
         mesh = bpy.context.object.data
-        x_mesh_width  = bpy.context.object.dimensions.x
+        x_mesh_width = bpy.context.object.dimensions.x
         x_mesh_height = bpy.context.object.dimensions.y
         z_max = bpy.context.object.dimensions.z
         
@@ -66,7 +67,7 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
         range_y_start = -x_mesh_height / 2.0
         range_y_end = x_mesh_height / 2.0
         
-        image_width  = addon_prefs.width
+        image_width = addon_prefs.width
         image_height = addon_prefs.height
                
         scene = bpy.context.scene
@@ -91,17 +92,47 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
                 p2 = ((y + 0) * image_width + (x + 1))
                 p3 = ((y + 1) * image_width + (x + 1))
                 p4 = p0 * 4
-                h  = (v_height[p0] + v_height[p1] + v_height[p2] + v_height[p3]) * 0.25
+                h = (v_height[p0] + v_height[p1] + v_height[p2] + v_height[p3]) * 0.25
                 pixels[p4 + 0] = h
                 pixels[p4 + 1] = h
                 pixels[p4 + 2] = h
                 pixels[p4 + 3] = h
             
         image.pixels = pixels
-        image.filepath_raw = addon_prefs.outpath
+        image.filepath_raw = path + '_x' + str(rx) + '_y' + str(ry) + '.png'
         image.file_format = 'PNG'
         image.save()
         
+    def execute(self, context):
+        preferences = context.preferences
+        addon_prefs = preferences.addons[__name__].preferences
+        if bpy.context.object == None:
+            self.report({'ERROR_INVALID_INPUT'}, "Error: no object selected.")
+            return{ 'CANCELLED'}
+        if bpy.context.object.type != 'MESH':
+            self.report({'ERROR_INVALID_INPUT'}, "Error: %s is not a Mesh." % bpy.context.object.name)
+            return{ 'CANCELLED'}
+
+        object = bpy.context.object
+        
+        path = addon_prefs.outpath
+        for x in range(addon_prefs.range_x):
+            for y in range(addon_prefs.range_y):
+                noffset_x = addon_prefs.noise_offset_x + (x * addon_prefs.noise_size_x)
+                noffset_y = addon_prefs.noise_offset_y + (y * addon_prefs.noise_size_y)
+
+                object.select_set(True)
+                if bpy.context.object == None:
+                    self.report({'ERROR_INVALID_INPUT'}, "Error: no object selected.")
+                    return{ 'CANCELLED'}
+                if bpy.context.object.type != 'MESH':
+                    self.report({'ERROR_INVALID_INPUT'}, "Error: %s is not a Mesh." % bpy.context.object.name)
+                    return{ 'CANCELLED'}
+
+                self.export_mesh(addon_prefs, path, x, y)
+                bpy.ops.mesh.landscape_add(noise_offset_x=noffset_x, noise_offset_y=noffset_y, refresh=True)
+
+
         return{ 'FINISHED'}
 
 
@@ -121,7 +152,14 @@ class HeightmapBAKER_VIEW_3D_PT_panel(bpy.types.Panel):
         # Options for how to do the conversion
         box.row().prop(addon_prefs, "width")
         box.row().prop(addon_prefs, "height")
+        box.row().prop(addon_prefs, "range_x")
+        box.row().prop(addon_prefs, "range_y")
+        box.row().prop(addon_prefs, "noise_offset_x")
+        box.row().prop(addon_prefs, "noise_offset_y")
+        box.row().prop(addon_prefs, "noise_size_x")
+        box.row().prop(addon_prefs, "noise_size_y")
         box.row().prop(addon_prefs, "outpath")
+
         box.row().operator('heightmap_baker.bake')
 
 classes = (
@@ -129,7 +167,6 @@ classes = (
     HeightmapBAKER_VIEW_3D_PT_panel,
 )
 #register, unregister = bpy.utils.register_classes_factory(classes)
-
 def register():
     bpy.utils.register_class(HeightmapBakerPreferences)
     for cls in classes:

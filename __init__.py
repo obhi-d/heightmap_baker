@@ -13,6 +13,7 @@ bl_info = {
 }
 
 import bpy
+import math
 from bpy.types import Operator, AddonPreferences
 from bpy.props import StringProperty, IntProperty, BoolProperty, FloatProperty, EnumProperty
 
@@ -29,8 +30,7 @@ class HeightmapBakerPreferences(bpy.types.AddonPreferences):
     noise_offset_x : FloatProperty(name="Noise Offset X", default=0.0)
     noise_offset_y : FloatProperty(name="Noise Offset Y", default=0.0)
 
-    noise_size_x : FloatProperty(name="Noise Size X", default=1.0)
-    noise_size_y : FloatProperty(name="Noise Size Y", default=1.0)
+    noise_size : FloatProperty(name="Noise Size", default=1.0)
         
     outpath : StringProperty(name="Output Dir", subtype='FILE_PATH',)
 
@@ -44,8 +44,7 @@ class HeightmapBakerPreferences(bpy.types.AddonPreferences):
         box.row().prop(self, "range_y")
         box.row().prop(self, "noise_offset_x")
         box.row().prop(self, "noise_offset_y")
-        box.row().prop(self, "noise_size_x")
-        box.row().prop(self, "noise_size_y")
+        box.row().prop(self, "noise_size")
         box.row().prop(self, "outpath")
         
 
@@ -73,29 +72,23 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
         scene.render.image_settings.color_depth = '16'
         
         image = bpy.data.images.new("Heightmap", image_width, image_height)
-        
         pixels = [None] * image_width * image_height * 4
-        v_height = [0.0] * (image_width + 1) * (image_height + 1)
-        
+        x = 0
+        y = 0
         for v in mesh.vertices:
-            x = int(((v.co.x - range_x_start) / x_mesh_width) * image_width)
-            y = int(((v.co.y - range_y_start) / x_mesh_height) * image_height)
+            
             z = (v.co.z / z_max)
-            p = (y * image_width + x)
-            v_height[p] = z
-        
-        for x in range(image_width):
-            for y in range(image_height):
-                p0 = ((y + 0) * image_width + (x + 0))
-                p1 = ((y + 1) * image_width + (x + 0))
-                p2 = ((y + 0) * image_width + (x + 1))
-                p3 = ((y + 1) * image_width + (x + 1))
-                p4 = p0 * 4
-                h = (v_height[p0] + v_height[p1] + v_height[p2] + v_height[p3]) * 0.25
-                pixels[p4 + 0] = h
-                pixels[p4 + 1] = h
-                pixels[p4 + 2] = h
-                pixels[p4 + 3] = h
+            p = (x * image_height + y)
+            pixels[p*4 + 0] = z
+            pixels[p*4 + 1] = z
+            pixels[p*4 + 2] = z
+            pixels[p*4 + 3] = z
+
+            y = y + 1
+            if y == image_height:
+                x = x + 1
+                y = 0
+
             
         image.pixels = pixels
         image.filepath_raw = path + '_x' + str(rx) + '_y' + str(ry) + '.png'
@@ -125,8 +118,8 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
         path = addon_prefs.outpath
         for x in range(addon_prefs.range_x):
             for y in range(addon_prefs.range_y):
-                noffset_x = addon_prefs.noise_offset_x + (x * addon_prefs.noise_size_x)
-                noffset_y = addon_prefs.noise_offset_y + (y * addon_prefs.noise_size_y)
+                noffset_x = addon_prefs.noise_offset_x + (x * addon_prefs.noise_size)
+                noffset_y = addon_prefs.noise_offset_y + (y * addon_prefs.noise_size)
 
                 obj.select_set(True)
                 if bpy.context.object == None:
@@ -136,12 +129,12 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
                     self.report({'ERROR_INVALID_INPUT'}, "Error: %s is not a Mesh." % bpy.context.object.name)
                     return{ 'CANCELLED'}
 
-                self.export_mesh(addon_prefs, path, x, y)
                 bpy.ops.object.mode_set(mode = 'EDIT')
                 bpy.ops.object.mode_set(mode = 'OBJECT')
 
                 obj.ant_landscape.noise_offset_x = noffset_x;
                 obj.ant_landscape.noise_offset_y = noffset_y;
+                print('Landscape nx - ny: ', noffset_x, noffset_y)
 
                 keys = obj.ant_landscape.keys()
                 if keys:
@@ -166,9 +159,10 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
                             v.co[2] = 0.0
                             v.co[2] = noise_gen(v.co, prop)
                     mesh.update()
+                    self.export_mesh(addon_prefs, path, x, y)
                 else:
                     pass
-
+                                
 
         return{ 'FINISHED'}
 
@@ -193,8 +187,7 @@ class HeightmapBAKER_VIEW_3D_PT_panel(bpy.types.Panel):
         box.row().prop(addon_prefs, "range_y")
         box.row().prop(addon_prefs, "noise_offset_x")
         box.row().prop(addon_prefs, "noise_offset_y")
-        box.row().prop(addon_prefs, "noise_size_x")
-        box.row().prop(addon_prefs, "noise_size_y")
+        box.row().prop(addon_prefs, "noise_size")
         box.row().prop(addon_prefs, "outpath")
 
         box.row().operator('heightmap_baker.bake')

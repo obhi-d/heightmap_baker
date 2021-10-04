@@ -21,7 +21,6 @@ class HeightmapBakerPreferences(bpy.types.AddonPreferences):
     # when defining this in a submodule of a python package.
     bl_idname = __name__
 
-
     width   : IntProperty(name="Width"  , default=True)
     height  : IntProperty(name="Height" , default=True)
     range_x : IntProperty(name="Range X", default=True)
@@ -103,7 +102,15 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
         image.file_format = 'PNG'
         image.save()
         
+    @classmethod
+    def poll(cls, context):
+        ob = bpy.context.active_object
+        return (ob.ant_landscape and not ob.ant_landscape.sphere_mesh)
+
     def execute(self, context):
+
+        from ant_landscape.ant_noise import noise_gen
+
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
         if bpy.context.object == None:
@@ -113,7 +120,7 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
             self.report({'ERROR_INVALID_INPUT'}, "Error: %s is not a Mesh." % bpy.context.object.name)
             return{ 'CANCELLED'}
 
-        object = bpy.context.object
+        obj = bpy.context.object
         
         path = addon_prefs.outpath
         for x in range(addon_prefs.range_x):
@@ -121,7 +128,7 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
                 noffset_x = addon_prefs.noise_offset_x + (x * addon_prefs.noise_size_x)
                 noffset_y = addon_prefs.noise_offset_y + (y * addon_prefs.noise_size_y)
 
-                object.select_set(True)
+                obj.select_set(True)
                 if bpy.context.object == None:
                     self.report({'ERROR_INVALID_INPUT'}, "Error: no object selected.")
                     return{ 'CANCELLED'}
@@ -130,7 +137,37 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
                     return{ 'CANCELLED'}
 
                 self.export_mesh(addon_prefs, path, x, y)
-                bpy.ops.mesh.landscape_add(noise_offset_x=noffset_x, noise_offset_y=noffset_y, refresh=True)
+                bpy.ops.object.mode_set(mode = 'EDIT')
+                bpy.ops.object.mode_set(mode = 'OBJECT')
+
+                obj.ant_landscape.noise_offset_x = noffset_x;
+                obj.ant_landscape.noise_offset_y = noffset_y;
+
+                keys = obj.ant_landscape.keys()
+                if keys:
+                    ob = obj.ant_landscape
+                    prop = []
+                    for key in keys:
+                        prop.append(getattr(ob, key))
+
+                    # redraw verts
+                    mesh = obj.data
+
+                    if ob['vert_group'] != "" and ob['vert_group'] in obj.vertex_groups:
+                        vertex_group = obj.vertex_groups[ob['vert_group']]
+                        gi = vertex_group.index
+                        for v in mesh.vertices:
+                            for g in v.groups:
+                                if g.group == gi:
+                                    v.co[2] = 0.0
+                                    v.co[2] = vertex_group.weight(v.index) * noise_gen(v.co, prop)
+                    else:
+                        for v in mesh.vertices:
+                            v.co[2] = 0.0
+                            v.co[2] = noise_gen(v.co, prop)
+                    mesh.update()
+                else:
+                    pass
 
 
         return{ 'FINISHED'}

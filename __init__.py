@@ -22,88 +22,96 @@ class HeightmapBakerPreferences(bpy.types.AddonPreferences):
     # when defining this in a submodule of a python package.
     bl_idname = __name__
 
-    width   : IntProperty(name="Width"  , default=True)
-    height  : IntProperty(name="Height" , default=True)
     range_x : IntProperty(name="Range X", default=True)
     range_y : IntProperty(name="Range Y", default=True)
-
-    noise_offset_x : FloatProperty(name="Noise Offset X", default=0.0)
-    noise_offset_y : FloatProperty(name="Noise Offset Y", default=0.0)
-
-    noise_size : FloatProperty(name="Noise Size", default=1.0)
         
-    outpath : StringProperty(name="Output Dir", subtype='FILE_PATH',)
+    edge_falloff_active: BoolProperty(name="Edge Falloff Active", default=False)
+    single_heightmap   : BoolProperty(name="Single Heightmap", default=True)
+    outpath            : StringProperty(name="Output Dir", subtype='FILE_PATH',)
 
     def draw(self, context):
         layout = self.layout
         box = layout.box()
         box.label(text="Streaming")
-        box.row().prop(self, "width")
-        box.row().prop(self, "height")
         box.row().prop(self, "range_x")
         box.row().prop(self, "range_y")
-        box.row().prop(self, "noise_offset_x")
-        box.row().prop(self, "noise_offset_y")
-        box.row().prop(self, "noise_size")
+        box.row().prop(self, "edge_falloff_active")
+        box.row().prop(self, "single_heightmap")
         box.row().prop(self, "outpath")
         
+
+class Heightmap:
+
+    def __init__(self, width, height, cell_width, cell_height):
+        self.size = [width, height]
+        self.cell_size = [cell_width, cell_height]
+        self.cell = [0, 0]
+        self.pixels = [None] * width * height * 4
+        self.offset_x = 0
+        self.offset_y = 0
+        print("Heightmap dim: " + str(self.size))
+
+    def set_cell(self, cell_x, cell_y):
+        self.cell[0] = cell_x
+        self.cell[1] = cell_y
+        self.offset_x = (self.cell_size[0] - 1) * self.cell[0]
+        self.offset_y = (self.cell_size[1] - 1) * self.cell[1]
+
+    def set(self, x, y, z):
+        px = x + self.offset_x
+        py = y + self.offset_y
+
+        p = (py * self.size[0]  + px)
+        self.pixels[p*4 + 0] = z
+        self.pixels[p*4 + 1] = z
+        self.pixels[p*4 + 2] = z
+        self.pixels[p*4 + 3] = z
+
+    def save(self, path, cell_x = None, cell_y = None):
+        scene = bpy.context.scene
+        old_depth = scene.render.image_settings.color_depth
+        scene.render.image_settings.color_depth = '16'
+        
+        image = bpy.data.images.new("Heightmap", self.size[0], self.size[1])
+        image.pixels = self.pixels
+        if cell_x != None and cell_y != None:
+            image.filepath_raw = path + '_x' + str(cell_x) + '_y' + str(cell_y) + '.png'
+        else:
+            image.filepath_raw = path + '.png'
+        image.file_format = 'PNG'
+        image.save()
+
+        scene.render.image_settings.color_depth = old_depth
 
 class OBJECT_OT_HeightmapBake(bpy.types.Operator):
     bl_idname = "heightmap_baker.bake"
     bl_label = "Export Heightmap"
     bl_description = "Export selected object as heightmap"
 
-    def export_mesh(self, addon_prefs, path, rx, ry):
-                
-        mesh = bpy.context.object.data
-        x_mesh_width = bpy.context.object.dimensions.x
-        x_mesh_height = bpy.context.object.dimensions.y
-        z_max = bpy.context.object.dimensions.z
-        
-        range_x_start = -x_mesh_width / 2.0
-        range_x_end = x_mesh_width / 2.0
-        range_y_start = -x_mesh_height / 2.0
-        range_y_end = x_mesh_height / 2.0
-        
-        image_width = addon_prefs.width
-        image_height = addon_prefs.height
-               
-        scene = bpy.context.scene
-        scene.render.image_settings.color_depth = '16'
-        
-        image = bpy.data.images.new("Heightmap", image_width, image_height)
-        pixels = [None] * image_width * image_height * 4
-        x = 0
-        y = 0
-        for v in mesh.vertices:
-            
-            z = (v.co.z / z_max)
-            p = (x * image_height + y)
-            pixels[p*4 + 0] = z
-            pixels[p*4 + 1] = z
-            pixels[p*4 + 2] = z
-            pixels[p*4 + 3] = z
-
-            y = y + 1
-            if y == image_height:
-                x = x + 1
-                y = 0
-
-            
-        image.pixels = pixels
-        image.filepath_raw = path + '_x' + str(rx) + '_y' + str(ry) + '.png'
-        image.file_format = 'PNG'
-        image.save()
-        
     @classmethod
     def poll(cls, context):
         ob = bpy.context.active_object
         return (ob.ant_landscape and not ob.ant_landscape.sphere_mesh)
 
-    def execute(self, context):
 
+    def export_mesh(self, addon_prefs, prop, mesh_size, hm):
+                
         from ant_landscape.ant_noise import noise_gen
+                
+        x_start = -mesh_size[0] / 2.0
+        x_step  = mesh_size[0] / hm.cell_size[0]
+        y_start = -mesh_size[1] / 2.0
+        y_step  = mesh_size[1] / hm.cell_size[1]
+        
+        for y in range(hm.cell_size[1]):
+            for x in range(hm.cell_size[0]):
+                co = [x_start + x * x_step, y_start + y * y_step, 0]
+                z = noise_gen(co, prop)
+                hm.set(x, y, z)
 
+
+    def execute(self, context):
+                
         preferences = context.preferences
         addon_prefs = preferences.addons[__name__].preferences
         if bpy.context.object == None:
@@ -115,55 +123,80 @@ class OBJECT_OT_HeightmapBake(bpy.types.Operator):
 
         obj = bpy.context.object
         
-        path = addon_prefs.outpath
-        for x in range(addon_prefs.range_x):
-            for y in range(addon_prefs.range_y):
-                noffset_x = addon_prefs.noise_offset_x + (x * addon_prefs.noise_size)
-                noffset_y = addon_prefs.noise_offset_y + (y * addon_prefs.noise_size)
+        
+        path           = addon_prefs.outpath
+        noise_offset_x = obj.ant_landscape.noise_offset_x
+        noise_offset_y = obj.ant_landscape.noise_offset_y
+        mesh_size_x    = obj.ant_landscape.mesh_size_x
+        mesh_size_y    = obj.ant_landscape.mesh_size_y
+        noise_size_x   = mesh_size_x / (obj.ant_landscape.noise_size * obj.ant_landscape.noise_size_x)
+        noise_size_y   = mesh_size_y / (obj.ant_landscape.noise_size * obj.ant_landscape.noise_size_y)
+        image_width    = obj.ant_landscape.subdivision_x
+        image_height   = obj.ant_landscape.subdivision_y
+        edge_falloff   = addon_prefs.edge_falloff_active
+        single_hm      = addon_prefs.single_heightmap
+        edgeoff_orig   = obj.ant_landscape.edge_falloff
+        
+        ob   = obj.ant_landscape
+        keys = ob.keys()
+        if not keys:
+            return { 'FINISHED'}
+        prop = []
+        for key in keys:
+            prop.append(getattr(ob, key))
 
-                obj.select_set(True)
-                if bpy.context.object == None:
-                    self.report({'ERROR_INVALID_INPUT'}, "Error: no object selected.")
-                    return{ 'CANCELLED'}
-                if bpy.context.object.type != 'MESH':
-                    self.report({'ERROR_INVALID_INPUT'}, "Error: %s is not a Mesh." % bpy.context.object.name)
-                    return{ 'CANCELLED'}
+        hm = None
+        if single_hm:
+            hm = Heightmap((image_width - 1) * addon_prefs.range_x + 1, (image_height - 1) * addon_prefs.range_y + 1, image_width, image_height)
 
-                bpy.ops.object.mode_set(mode = 'EDIT')
-                bpy.ops.object.mode_set(mode = 'OBJECT')
-
-                obj.ant_landscape.noise_offset_x = noffset_x;
-                obj.ant_landscape.noise_offset_y = noffset_y;
-                print('Landscape nx - ny: ', noffset_x, noffset_y)
-
-                keys = obj.ant_landscape.keys()
-                if keys:
-                    ob = obj.ant_landscape
-                    prop = []
-                    for key in keys:
-                        prop.append(getattr(ob, key))
-
-                    # redraw verts
-                    mesh = obj.data
-
-                    if ob['vert_group'] != "" and ob['vert_group'] in obj.vertex_groups:
-                        vertex_group = obj.vertex_groups[ob['vert_group']]
-                        gi = vertex_group.index
-                        for v in mesh.vertices:
-                            for g in v.groups:
-                                if g.group == gi:
-                                    v.co[2] = 0.0
-                                    v.co[2] = vertex_group.weight(v.index) * noise_gen(v.co, prop)
-                    else:
-                        for v in mesh.vertices:
-                            v.co[2] = 0.0
-                            v.co[2] = noise_gen(v.co, prop)
-                    mesh.update()
-                    self.export_mesh(addon_prefs, path, x, y)
+        for y in range(addon_prefs.range_y):
+            for x in range(addon_prefs.range_x):
+                if not single_hm:
+                    hm = Heightmap(image_width, image_height, image_width, image_height)
                 else:
-                    pass
-                                
+                    hm.set_cell(x, y)
 
+                noffset_x = noise_offset_x + (x * noise_size_x)
+                noffset_y = noise_offset_y + (y * noise_size_y)
+                
+                prop[14] = noffset_x
+                prop[15] = noffset_y
+
+                eoff = "0"
+                if (edge_falloff):
+                    if x == 0 and 0 == (addon_prefs.range_x-1) and y == 0 and 0 == (addon_prefs.range_y-1):
+                        eoff = "11"  #x y
+                    elif x == 0 and 0 == (addon_prefs.range_x-1):
+                        eoff = "1"  #x
+                    elif y == 0 and 0 == (addon_prefs.range_y-1):
+                        eoff = "4"  #y
+                    elif x == 0 and y == 0:
+                        eoff = "7"  #-x +y
+                    elif x == 0 and y == (addon_prefs.range_y-1):
+                        eoff = "8"  #-x -y
+                    elif x == (addon_prefs.range_x-1) and y == 0:
+                        eoff = "10"  #+x +y
+                    elif x == (addon_prefs.range_x-1) and y == (addon_prefs.range_y-1):
+                        eoff = "9"  #+x -y
+                    elif x == 0:
+                        eoff = "2"  #-x
+                    elif y == 0:
+                        eoff = "5"  #+y
+                    elif x == (addon_prefs.range_x-1):
+                        eoff = "3"  #+x
+                    elif y == (addon_prefs.range_y-1):
+                        eoff = "6"  #-y
+
+                prop[41] = eoff
+
+                # redraw verts
+                self.export_mesh(addon_prefs, prop, [mesh_size_x, mesh_size_y], hm)
+
+                if not single_hm:
+                    hm.save(path, x, y)
+
+        if single_hm:
+            hm.save(path)
         return{ 'FINISHED'}
 
 
@@ -181,13 +214,10 @@ class HeightmapBAKER_VIEW_3D_PT_panel(bpy.types.Panel):
         addon_prefs = preferences.addons[__name__].preferences
         box = layout.box()
         # Options for how to do the conversion
-        box.row().prop(addon_prefs, "width")
-        box.row().prop(addon_prefs, "height")
         box.row().prop(addon_prefs, "range_x")
         box.row().prop(addon_prefs, "range_y")
-        box.row().prop(addon_prefs, "noise_offset_x")
-        box.row().prop(addon_prefs, "noise_offset_y")
-        box.row().prop(addon_prefs, "noise_size")
+        box.row().prop(addon_prefs, "edge_falloff_active")
+        box.row().prop(addon_prefs, "single_heightmap")
         box.row().prop(addon_prefs, "outpath")
 
         box.row().operator('heightmap_baker.bake')

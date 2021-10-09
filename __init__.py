@@ -14,6 +14,7 @@ bl_info = {
 
 import bpy
 import math
+import array
 from bpy.types import Operator, AddonPreferences
 from bpy.props import StringProperty, IntProperty, BoolProperty, FloatProperty, EnumProperty
 
@@ -46,7 +47,7 @@ class Heightmap:
         self.size = [width, height]
         self.cell_size = [cell_width, cell_height]
         self.cell = [0, 0]
-        self.pixels = [None] * width * height * 4
+        self.pixels = [None] * width * height
         self.offset_x = 0
         self.offset_y = 0
         print("Heightmap dim: " + str(self.size))
@@ -62,26 +63,18 @@ class Heightmap:
         py = y + self.offset_y
 
         p = (py * self.size[0]  + px)
-        self.pixels[p*4 + 0] = z
-        self.pixels[p*4 + 1] = z
-        self.pixels[p*4 + 2] = z
-        self.pixels[p*4 + 3] = z
+        self.pixels[p] = int(z * 65535.0)
 
     def save(self, path, cell_x = None, cell_y = None):
-        scene = bpy.context.scene
-        old_depth = scene.render.image_settings.color_depth
-        scene.render.image_settings.color_depth = '16'
-        
-        image = bpy.data.images.new("Heightmap", self.size[0], self.size[1])
-        image.pixels = self.pixels
+        raw16 = array.array('H', self.pixels)
         if cell_x != None and cell_y != None:
-            image.filepath_raw = path + '_x' + str(cell_x) + '_y' + str(cell_y) + '.png'
+            filepath_raw = path + '_x' + str(cell_x) + '_y' + str(cell_y) + '.png'
         else:
-            image.filepath_raw = path + '.png'
-        image.file_format = 'PNG'
-        image.save()
+            filepath_raw = path + '.r16'
 
-        scene.render.image_settings.color_depth = old_depth
+        with open(filepath_raw, "wb") as f:
+            raw16.tofile(f)
+        
 
 class OBJECT_OT_HeightmapBake(bpy.types.Operator):
     bl_idname = "heightmap_baker.bake"
